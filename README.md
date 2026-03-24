@@ -57,8 +57,15 @@ git push -u origin main
 
 说明：
 
-- `requirements.txt`、`runtime.txt`、`packages.txt` 会被 Cloud 自动识别。
-- 若图表中文显示为方框，可保留 `packages.txt` 中的 `fonts-noto-cjk`（已配置）；仍异常时可在应用内以英文环境排查字体。
+- Cloud 会安装根目录的 `requirements.txt`。默认 **不包含** `packages.txt`，避免 `apt` 阶段偶发失败导致整次构建报错。
+- Python 版本在部署页 **Advanced settings** 里选择（建议 **3.11**）。
+
+### 若出现 “Error installing requirements”
+
+1. 打开 **Manage app → Logs**，看报错在 **Installing dependencies**（pip）还是系统包（apt）。  
+2. **pip**：确认仓库根目录只有一份依赖文件；可把 `requirements.txt` 保持为当前三行（`streamlit`、`matplotlib`、`openpyxl`）。  
+3. 换 **Advanced settings → Python version**（如 3.11）后 **Reboot app**。  
+4. 图表中文在网页上显示异常时，再在仓库根目录 **新建** `packages.txt`，内容**仅一行**（不要注释）：`fonts-noto-cjk`，然后重新部署。
 
 ## 仓库内文件说明
 
@@ -66,8 +73,7 @@ git push -u origin main
 |-------------|------|
 | `app_scheme_compare.py` | 主程序（Streamlit 入口） |
 | `requirements.txt` | Python 依赖 |
-| `runtime.txt` | 建议 Python 版本（Cloud） |
-| `packages.txt` | 系统字体包（Cloud Debian，可选） |
+| `packages.txt` | 可选（默认不放）：仅一行 `fonts-noto-cjk` 可改善 Linux 下图表中文；**禁止**写 `#` 注释行，否则 apt 会失败 |
 | `.streamlit/config.toml` | 主题与服务器基础配置 |
 | `.gitignore` | 不上传 venv、缓存等 |
 | `sample_prices_template.csv` | CSV 列名示例 |
