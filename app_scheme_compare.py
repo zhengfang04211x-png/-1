@@ -5,6 +5,8 @@
 import io
 import os
 import re
+import shutil
+import subprocess
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -15,19 +17,114 @@ import streamlit as st
 import platform
 
 
+def _linux_noto_cjk_font_files():
+    """Debian/Ubuntu/Streamlit Cloud 安装 fonts-noto-cjk 后的常见路径。"""
+    roots = [
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto-cjk",
+    ]
+    out = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        try:
+            for fn in os.listdir(root):
+                lower = fn.lower()
+                if not lower.endswith((".ttc", ".ttf", ".otf")):
+                    continue
+                if "cjk" in lower or "notosans" in lower.replace(" ", ""):
+                    out.append(os.path.join(root, fn))
+        except OSError:
+            continue
+    out.sort(key=lambda p: ("bold" in p.lower(), "regular" not in p.lower(), p))
+    return out
+
+
+def _linux_font_family_from_fc_list():
+    if not shutil.which("fc-list"):
+        return None
+    try:
+        out = subprocess.check_output(
+            ["fc-list", ":lang=zh", "family"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, TimeoutError):
+        return None
+    best = None
+    for line in out.splitlines():
+        fam = line.split(",")[0].strip()
+        if not fam:
+            continue
+        if any(x in fam for x in ("Noto", "CJK", "Source Han", "WenQuanYi", "文泉驿")):
+            return fam
+        if best is None:
+            best = fam
+    return best
+
+
+def _matplotlib_cjk_fontproperties():
+    """Linux 下若已登记 Noto 字体文件，用路径强制绘图中文（图例/轴标签）。"""
+    import matplotlib.font_manager as fm
+
+    path = st.session_state.get("_mpl_cjk_font_path")
+    if path and os.path.isfile(path):
+        return fm.FontProperties(fname=path)
+    return None
+
+
 def _ensure_matplotlib_chinese_font():
-    """图表中文：本机用系统字体；Linux/Streamlit Cloud 用 Noto CJK 等（需 packages.txt 安装 fonts-noto-cjk）。"""
-    if st.session_state.get("_mpl_cjk_configured"):
-        return
+    """图表中文：Win/Mac 用系统字体；Linux/云端用 Noto 字体文件注册 + fc-list（需 packages.txt: fonts-noto-cjk）。"""
     plt.rcParams["axes.unicode_minus"] = False
     system = platform.system()
     if system == "Windows":
+        st.session_state.pop("_mpl_cjk_font_path", None)
+        plt.rcParams["font.family"] = "sans-serif"
         plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial"]
-    elif system == "Darwin":
+        return
+    if system == "Darwin":
+        st.session_state.pop("_mpl_cjk_font_path", None)
+        plt.rcParams["font.family"] = "sans-serif"
         plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "PingFang HK"]
-    else:
-        import matplotlib.font_manager as fm
+        return
 
+    # Linux（含 Streamlit Cloud）：按字体文件路径 addfont，避免 .ttc 在 fontManager 里名称对不上
+    import matplotlib.font_manager as fm
+
+    st.session_state.pop("_mpl_cjk_font_path", None)
+    chosen = None
+    fc_paths = []
+    if shutil.which("fc-match"):
+        for pat in ("Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK TC"):
+            try:
+                out = subprocess.check_output(
+                    ["fc-match", "-f", "%{file}", pat],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=5,
+                ).strip()
+                if out and os.path.isfile(out) and out not in fc_paths:
+                    fc_paths.append(out)
+            except (subprocess.CalledProcessError, FileNotFoundError, TimeoutError):
+                continue
+    _seen_font_path = set()
+    for path in fc_paths + _linux_noto_cjk_font_files():
+        if path in _seen_font_path:
+            continue
+        _seen_font_path.add(path)
+        try:
+            fm.fontManager.addfont(path)
+            prop = fm.FontProperties(fname=path)
+            chosen = prop.get_name()
+            if chosen:
+                st.session_state["_mpl_cjk_font_path"] = path
+                break
+        except Exception:
+            continue
+
+    if not chosen:
         try:
             fm._load_fontmanager(try_read_cache=False)
         except Exception:
@@ -38,9 +135,6 @@ def _ensure_matplotlib_chinese_font():
             "Noto Sans CJK JP",
             "Noto Serif CJK SC",
             "Source Han Sans SC",
-            "WenQuanYi Micro Hei",
-            "WenQuanYi Zen Hei",
-            "Droid Sans Fallback",
         ]
         available = {f.name for f in fm.fontManager.ttflist}
         chosen = next((n for n in prefer if n in available), None)
@@ -49,11 +143,15 @@ def _ensure_matplotlib_chinese_font():
                 if "Noto" in n and "CJK" in n:
                     chosen = n
                     break
-        if chosen:
-            plt.rcParams["font.sans-serif"] = [chosen, "DejaVu Sans", "sans-serif"]
-        else:
-            plt.rcParams["font.sans-serif"] = ["DejaVu Sans", "sans-serif"]
-    st.session_state["_mpl_cjk_configured"] = True
+
+    if not chosen:
+        chosen = _linux_font_family_from_fc_list()
+
+    plt.rcParams["font.family"] = "sans-serif"
+    if chosen:
+        plt.rcParams["font.sans-serif"] = [chosen, "DejaVu Sans", "sans-serif"]
+    else:
+        plt.rcParams["font.sans-serif"] = ["DejaVu Sans", "sans-serif"]
 
 
 st.set_page_config(
@@ -915,6 +1013,8 @@ st.markdown("---")
 st.subheader("逐日：盈亏曲线")
 cum_fut_wan = futures_mtm_cumulative_wan(sub, df_e, spot_tons, hedge_ratio, futures_pnl_sign)
 
+_ensure_matplotlib_chinese_font()
+_fp = _matplotlib_cjk_fontproperties()
 fig, ax = plt.subplots(figsize=(12, 5))
 ax.plot(
     res_spot["Date"],
@@ -930,8 +1030,12 @@ ax.plot(
     linestyle="--",
 )
 ax.axhline(0, color="black", linestyle=":", alpha=0.4)
-ax.set_ylabel("万元")
-ax.legend(loc="upper left")
+if _fp:
+    ax.set_ylabel("万元", fontproperties=_fp)
+    ax.legend(loc="upper left", prop=_fp)
+else:
+    ax.set_ylabel("万元")
+    ax.legend(loc="upper left")
 plt.tight_layout()
 st.pyplot(fig)
 plt.close(fig)
@@ -974,6 +1078,8 @@ if show_margin_sim:
     idx_m = np.arange(n_m)
     inj_w = res_margin["Cash_Injection"].values / 10000.0
     out_w = res_margin["Cash_Withdrawal"].values / 10000.0
+    _ensure_matplotlib_chinese_font()
+    _fp = _matplotlib_cjk_fontproperties()
     fig_m, (ax_b, ax_r) = plt.subplots(
         2,
         1,
@@ -984,14 +1090,21 @@ if show_margin_sim:
     bw = 0.35
     ax_b.bar(idx_m - bw / 2, inj_w, bw, label="补充保证金（万元）", color="#c0392b", align="center")
     ax_b.bar(idx_m + bw / 2, out_w, bw, label="提取出金（万元）", color="#2980b9", align="center")
-    ax_b.set_ylabel("万元")
-    ax_b.legend(loc="upper right")
-    ax_b.set_title("何时补保证金 / 何时出金（金额）")
+    if _fp:
+        ax_b.set_ylabel("万元", fontproperties=_fp)
+        ax_b.legend(loc="upper right", prop=_fp)
+        ax_b.set_title("何时补保证金 / 何时出金（金额）", fontproperties=_fp)
+        ax_r.set_ylabel("风险度\n（权益÷保证金）", fontproperties=_fp)
+        ax_r.set_xlabel("日期", fontproperties=_fp)
+    else:
+        ax_b.set_ylabel("万元")
+        ax_b.legend(loc="upper right")
+        ax_b.set_title("何时补保证金 / 何时出金（金额）")
+        ax_r.set_ylabel("风险度\n（权益÷保证金）")
+        ax_r.set_xlabel("日期")
     ax_b.grid(True, axis="y", alpha=0.3)
 
     ax_r.plot(idx_m, res_margin["Risk_Degree"], color="#8e44ad", lw=1.2, marker="o", markersize=2)
-    ax_r.set_ylabel("风险度\n（权益÷保证金）")
-    ax_r.set_xlabel("日期")
     ax_r.grid(True, alpha=0.3)
     step_m = max(1, n_m // 14)
     ticks_m = idx_m[::step_m]
