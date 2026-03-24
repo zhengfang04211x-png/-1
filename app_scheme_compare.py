@@ -14,6 +14,48 @@ import pandas as pd
 import streamlit as st
 import platform
 
+
+def _ensure_matplotlib_chinese_font():
+    """图表中文：本机用系统字体；Linux/Streamlit Cloud 用 Noto CJK 等（需 packages.txt 安装 fonts-noto-cjk）。"""
+    if st.session_state.get("_mpl_cjk_configured"):
+        return
+    plt.rcParams["axes.unicode_minus"] = False
+    system = platform.system()
+    if system == "Windows":
+        plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial"]
+    elif system == "Darwin":
+        plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "PingFang HK"]
+    else:
+        import matplotlib.font_manager as fm
+
+        try:
+            fm._load_fontmanager(try_read_cache=False)
+        except Exception:
+            pass
+        prefer = [
+            "Noto Sans CJK SC",
+            "Noto Sans CJK TC",
+            "Noto Sans CJK JP",
+            "Noto Serif CJK SC",
+            "Source Han Sans SC",
+            "WenQuanYi Micro Hei",
+            "WenQuanYi Zen Hei",
+            "Droid Sans Fallback",
+        ]
+        available = {f.name for f in fm.fontManager.ttflist}
+        chosen = next((n for n in prefer if n in available), None)
+        if chosen is None:
+            for n in sorted(available):
+                if "Noto" in n and "CJK" in n:
+                    chosen = n
+                    break
+        if chosen:
+            plt.rcParams["font.sans-serif"] = [chosen, "DejaVu Sans", "sans-serif"]
+        else:
+            plt.rcParams["font.sans-serif"] = ["DejaVu Sans", "sans-serif"]
+    st.session_state["_mpl_cjk_configured"] = True
+
+
 st.set_page_config(
     page_title="现货与期货配对",
     page_icon="⚖️",
@@ -58,14 +100,7 @@ except OSError:
         plt.style.use("seaborn-whitegrid")
     except OSError:
         plt.style.use("ggplot")
-_sys = platform.system()
-if _sys == "Windows":
-    plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial"]
-elif _sys == "Darwin":
-    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC"]
-else:
-    plt.rcParams["font.sans-serif"] = ["WenQuanYi Micro Hei"]
-plt.rcParams["axes.unicode_minus"] = False
+_ensure_matplotlib_chinese_font()
 
 
 def extract_futures_variety_name(filename):

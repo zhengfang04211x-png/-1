@@ -6,6 +6,13 @@
 
 将 **`方案对比网页-GitHub`** 整个目录作为 **独立 Git 仓库根目录** 上传到 GitHub，再部署到 **Streamlit Community Cloud** 即可免费获得公网访问链接（或仅限团队，视 Cloud 设置而定）。
 
+### 重要：Cloud 报错 `Unable to locate package #` / `Streamlit` 等
+
+**不是「中文依赖」问题。** 若仓库根目录有 **`packages.txt`**，Cloud 会把**每一行**当作 `apt install` 的包名。  
+你在文件里写的 **`#` 注释、中文说明、带空格的句子** 会被拆成多个「包名」，就会出现 `Unable to locate package #`、`Streamlit`、`Community` 等错误。
+
+**处理：** 把 `packages.txt` 改成**仅一行** `fonts-noto-cjk`（与仓库模板一致），删掉所有注释和中文说明后推送。若暂时不需要图表中文，可删除整个 `packages.txt`。详见 `部署前必读.txt`。
+
 ## CSV 格式要求
 
 - 需包含列名（支持 **GBK** 或 **UTF-8**）：
@@ -57,15 +64,16 @@ git push -u origin main
 
 说明：
 
-- Cloud 会安装根目录的 `requirements.txt`。默认 **不包含** `packages.txt`，避免 `apt` 阶段偶发失败导致整次构建报错。
-- Python 版本在部署页 **Advanced settings** 里选择（建议 **3.11**）。
+- Cloud 会安装 `requirements.txt`（pip），以及 **`packages.txt`（apt）**。  
+- **图表中文**依赖系统字体：本仓库已带 **`packages.txt` 仅一行** `fonts-noto-cjk`，**不要在该文件里写注释或中文**。  
+- Python 版本在 **Advanced settings** 里选（建议 **3.11**）。
 
 ### 若出现 “Error installing requirements”
 
-1. 打开 **Manage app → Logs**，看报错在 **Installing dependencies**（pip）还是系统包（apt）。  
-2. **pip**：确认仓库根目录只有一份依赖文件；可把 `requirements.txt` 保持为当前三行（`streamlit`、`matplotlib`、`openpyxl`）。  
-3. 换 **Advanced settings → Python version**（如 3.11）后 **Reboot app**。  
-4. 图表中文在网页上显示异常时，再在仓库根目录 **新建** `packages.txt`，内容**仅一行**（不要注释）：`fonts-noto-cjk`，然后重新部署。
+1. 打开 **Manage app → Logs**，区分 pip 与 apt 报错。  
+2. **`packages.txt` 只能有一行** `fonts-noto-cjk`；多行、`#`、中文说明都会导致 apt 失败。  
+3. **pip**：`requirements.txt` 保持 `streamlit`、`matplotlib`、`openpyxl`。  
+4. 换 Python 版本后 **Reboot app**。
 
 ## 仓库内文件说明
 
@@ -73,7 +81,7 @@ git push -u origin main
 |-------------|------|
 | `app_scheme_compare.py` | 主程序（Streamlit 入口） |
 | `requirements.txt` | Python 依赖 |
-| `packages.txt` | 可选（默认不放）：仅一行 `fonts-noto-cjk` 可改善 Linux 下图表中文；**禁止**写 `#` 注释行，否则 apt 会失败 |
+| `packages.txt` | **一行** `fonts-noto-cjk`（云端中文字体）；**禁止**注释或中文，否则 apt 失败 |
 | `.streamlit/config.toml` | 主题与服务器基础配置 |
 | `.gitignore` | 不上传 venv、缓存等 |
 | `sample_prices_template.csv` | CSV 列名示例 |

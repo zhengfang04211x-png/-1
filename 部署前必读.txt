@@ -1,0 +1,8 @@
+【图表中文变方框时】
+
+1. 仓库根目录需要有 packages.txt，且全文只有一行英文包名（不要注释、不要中文）：
+   fonts-noto-cjk
+
+2. 推送后让 Streamlit Cloud 重新部署；云端会用 apt 装 Noto 中文字体，程序会自动选用 Noto Sans CJK SC 等字体画图。
+
+3. 若仍方框：Manage app → Reboot；或确认 packages.txt 里没有第二行文字或 # 开头的行。
