@@ -1,0 +1,2 @@
+# Streamlit Community Cloud（Debian）可选：改善 Linux 下图表中文显示
+fonts-noto-cjk

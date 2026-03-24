@@ -1,0 +1,11 @@
+# Streamlit Cloud 会忽略 port；本地开发仍可用
+[theme]
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"
+
+[server]
+headless = true
+enableXsrfProtection = true
