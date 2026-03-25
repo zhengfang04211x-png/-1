@@ -603,7 +603,7 @@ def events_from_buy_sell_rows(df_editor, lot_tons):
         if pd_buy is not None and q > 0:
             events.append({"kind": "buy", "date": pd_buy, "tons": q, "mult": 1.0, "add": 0.0, "sell_all": False})
         if pd_sell is not None:
-            m = _row_float(r, "出售价期货倍数", 1.0)
+            m = _row_float(r, "出售价期货倍数", _DEFAULT_SELL_FUT_MULT)
             a = _row_float(r, "出售价加价(元/吨)", 0.0)
             events.append(
                 {
@@ -622,14 +622,15 @@ def events_from_buy_sell_rows(df_editor, lot_tons):
 
 
 _COL_ORDER = ("购买日期", "出售日期", "出售价期货倍数", "出售价加价(元/吨)")
+_DEFAULT_SELL_FUT_MULT = 1.1
 
 
 def empty_editor_df():
     return pd.DataFrame(
         {
             "购买日期": pd.to_datetime(["2025-01-02"]),
-            "出售日期": pd.to_datetime(["2025-02-02"]),
-            "出售价期货倍数": [1.0],
+            "出售日期": pd.to_datetime(["2025-02-05"]),
+            "出售价期货倍数": [_DEFAULT_SELL_FUT_MULT],
             "出售价加价(元/吨)": [0.0],
         }
     )
@@ -642,13 +643,13 @@ def normalize_ev_sheet(df):
     if not {"购买日期", "出售日期"}.issubset(set(df.columns)):
         return empty_editor_df()
     out = df.copy()
-    for col, default in (("出售价期货倍数", 1.0), ("出售价加价(元/吨)", 0.0)):
+    for col, default in (("出售价期货倍数", _DEFAULT_SELL_FUT_MULT), ("出售价加价(元/吨)", 0.0)):
         if col not in out.columns:
             out[col] = default
     out = out[list(_COL_ORDER)].copy()
     out["购买日期"] = pd.to_datetime(out["购买日期"], errors="coerce")
     out["出售日期"] = pd.to_datetime(out["出售日期"], errors="coerce")
-    out["出售价期货倍数"] = pd.to_numeric(out["出售价期货倍数"], errors="coerce").fillna(1.0)
+    out["出售价期货倍数"] = pd.to_numeric(out["出售价期货倍数"], errors="coerce").fillna(_DEFAULT_SELL_FUT_MULT)
     out["出售价加价(元/吨)"] = pd.to_numeric(out["出售价加价(元/吨)"], errors="coerce").fillna(0.0)
     return out
 
@@ -738,7 +739,7 @@ spot_tons = st.number_input(
     "现货吨数 (吨)",
     0.0,
     1e6,
-    30.0,
+    1.0,
     1.0,
     help="**从 0 吨起算**：到「购买日」一次性买进这么多吨，到「出售日」一次性卖光。典型就是时间段内一买一卖一笔单。",
 )
@@ -925,7 +926,7 @@ def build_pairing_table(
             elif buy_basis == "spot" and ps_b is not None:
                 buy_cost_eff = ps_b
                 buy_note = "购:CSV现货"
-        m_sell = _row_float(r, "出售价期货倍数", 1.0)
+        m_sell = _row_float(r, "出售价期货倍数", _DEFAULT_SELL_FUT_MULT)
         a_sell = _row_float(r, "出售价加价(元/吨)", 0.0)
         ps_s_eff = None
         sell_src = ""
