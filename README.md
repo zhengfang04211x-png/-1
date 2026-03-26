@@ -66,7 +66,8 @@ git push -u origin main
 
 - Cloud 会安装 `requirements.txt`（pip），以及 **`packages.txt`（apt）**。  
 - **图表中文**依赖系统字体：本仓库已带 **`packages.txt` 仅一行** `fonts-noto-cjk`，**不要在该文件里写注释或中文**。  
-- Python 版本在 **Advanced settings** 里选（建议 **3.11**）。
+- Python 版本在 **Advanced settings** 里选（建议 **3.11**）。  
+- 本仓库为**扁平结构**（根目录仅文件、无子文件夹）；主题等用 Streamlit 默认即可，若需自定义可在本地自行添加 `.streamlit/config.toml`（勿提交 secrets）。
 
 ### 若出现 “Error installing requirements”
 
@@ -80,11 +81,12 @@ git push -u origin main
 | 文件 / 目录 | 说明 |
 |-------------|------|
 | `app_scheme_compare.py` | 主程序（Streamlit 入口） |
-| `requirements.txt` | Python 依赖 |
+| `requirements.txt` | Python 依赖（含 `pandas`、`numpy`、`streamlit`、`matplotlib`、`openpyxl`） |
 | `packages.txt` | **一行** `fonts-noto-cjk`（云端中文字体）；**禁止**注释或中文，否则 apt 失败 |
-| `.streamlit/config.toml` | 主题与服务器基础配置 |
 | `.gitignore` | 不上传 venv、缓存等 |
 | `sample_prices_template.csv` | CSV 列名示例 |
+| `部署前必读.txt` | 图表中文变方框时的处理 |
+| `上传清单.txt` | 推 GitHub / Cloud 前的文件与命令核对 |
 
 ## 许可与隐私
 

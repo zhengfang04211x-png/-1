@@ -171,6 +171,7 @@ CN_COL_现货逐日 = {
     "Spot": "现货价",
     "Futures": "期货价",
     "Physical_Inventory": "现货库存吨",
+    "Spot_Float_Pnl": "现货持仓浮动盈亏",
     "Spot_Cash": "现货现金",
     "Physical_Realized_Daily": "现货当日已实现盈亏",
     "Daily_Buy_Tons": "当日买入吨",
@@ -388,7 +389,7 @@ def simulate_spot_only(price_df, by_d, initial_inventory, pricing):
     spot_cash = 0.0
     warns = []
     capped_days = 0
-    inv_l, cash_l, real_l, buy_l, sell_l = [], [], [], [], []
+    inv_l, cash_l, real_l, buy_l, sell_l, avg_l = [], [], [], [], [], []
 
     for i in range(len(sub)):
         row = sub.iloc[i]
@@ -409,9 +410,14 @@ def simulate_spot_only(price_df, by_d, initial_inventory, pricing):
         real_l.append(realized_day)
         buy_l.append(bq)
         sell_l.append(sq)
+        avg_l.append(float(avg_cost))
 
     out = sub.copy()
     out["Physical_Inventory"] = inv_l
+    _inv = out["Physical_Inventory"].to_numpy(dtype=float)
+    _spot = out["Spot"].to_numpy(dtype=float)
+    _avg = np.asarray(avg_l, dtype=float)
+    out["Spot_Float_Pnl"] = np.where(_inv > 1e-9, _inv * (_spot - _avg), 0.0)
     out["Spot_Cash"] = cash_l
     out["Physical_Realized_Daily"] = real_l
     out["Daily_Buy_Tons"] = buy_l
@@ -621,6 +627,13 @@ def events_from_buy_sell_rows(df_editor, lot_tons):
     return events
 
 
+def slice_price_for_events(df, evs):
+    ds = [e["date"] for e in evs]
+    lo, hi = min(ds), max(ds)
+    m = (df["Date"] >= pd.Timestamp(lo)) & (df["Date"] <= pd.Timestamp(hi))
+    return df.loc[m].copy().reset_index(drop=True), lo, hi
+
+
 _COL_ORDER = ("购买日期", "出售日期", "出售价期货倍数", "出售价加价(元/吨)")
 _DEFAULT_SELL_FUT_MULT = 1.1
 
@@ -785,12 +798,38 @@ pricing = {
 }
 
 st.markdown("**购销日历**（出售价 = 出售日期货 × 倍数 + 加价）")
+_b1, _b2, _b3 = st.columns(3)
+with _b1:
+    if st.button("删除最后一行", key="ev_drop_last", help="去掉表格最底下一行；至少保留一行。"):
+        _cur = normalize_ev_sheet(st.session_state.ev_sheet)
+        if len(_cur) > 1:
+            st.session_state.ev_sheet = _cur.iloc[:-1].reset_index(drop=True)
+        else:
+            st.warning("至少保留一行购销记录。")
+with _b2:
+    if st.button("删除空行", key="ev_drop_empty", help="删掉「购买、出售日期都未填」的行。"):
+        _cur = normalize_ev_sheet(st.session_state.ev_sheet)
+        _m = _cur["购买日期"].notna() | _cur["出售日期"].notna()
+        _filt = _cur.loc[_m].reset_index(drop=True)
+        st.session_state.ev_sheet = _filt if not _filt.empty else empty_editor_df()
+with _b3:
+    if st.button("重置为一笔购销", key="ev_reset_one", help="只保留一行默认日期示例。"):
+        st.session_state.ev_sheet = empty_editor_df()
+st.caption("表格可点右下角 **+** 加行；多出来的行若不好删，可用上方「删除最后一行」或「删除空行」。")
 df_e = st.data_editor(
     normalize_ev_sheet(st.session_state.ev_sheet),
     num_rows="dynamic",
     column_config={
-        "购买日期": st.column_config.DateColumn("购买日期", required=False),
-        "出售日期": st.column_config.DateColumn("出售日期", required=False),
+        "购买日期": st.column_config.DateColumn(
+            "购买日期",
+            required=False,
+            format="YYYY-MM-DD",
+        ),
+        "出售日期": st.column_config.DateColumn(
+            "出售日期",
+            required=False,
+            format="YYYY-MM-DD",
+        ),
         "出售价期货倍数": st.column_config.NumberColumn(
             "出售价×期货(倍)",
             help="实际出售价 = 出售日 CSV 期货收盘价 × 本列 + 右列加价",
@@ -831,13 +870,6 @@ for _, r in df_e.iterrows():
     if db is not None and ds is not None and ds < db:
         st.warning("存在「出售日期早于购买日期」的行；若当日无库存，卖出量为 0。")
         break
-
-
-def slice_price_for_events(df, evs):
-    ds = [e["date"] for e in evs]
-    lo, hi = min(ds), max(ds)
-    m = (df["Date"] >= pd.Timestamp(lo)) & (df["Date"] <= pd.Timestamp(hi))
-    return df.loc[m].copy().reset_index(drop=True), lo, hi
 
 
 def build_by_d(evs):
@@ -974,7 +1006,7 @@ def build_pairing_table(
 
 sub, lo, hi = slice_price_for_events(price_df, events)
 if sub.empty:
-    st.error(f"事件日期 {lo} ~ {hi} 在 CSV 中无行情。")
+    st.error(f"购销事件对应日期区间 {lo} ~ {hi} 在 CSV 中无交易日数据。")
     st.stop()
 
 by_d = build_by_d(events)
@@ -1012,24 +1044,86 @@ with m3:
 
 st.markdown("---")
 st.subheader("逐日：盈亏曲线")
+st.caption(
+    "蓝线对**出售价相对当日期货价多出来的部分**（元/吨）× 吨数作图时摊销，例如期货 70000、倍数 1.1 即 **(77000−70000)×吨数**；"
+    "从**卖出日**的日增量中扣除后，再按**购买日～出售日**之间的交易日均摊，曲线呈**逐步上移**而非最后一天突然抬升。"
+    "其它盈亏（相对成本、现货盯市等）不变。**加价列**计入相对期货的差额。**明细表与 Excel 仍为仿真逐日原值**。"
+)
 cum_fut_wan = futures_mtm_cumulative_wan(sub, df_e, spot_tons, hedge_ratio, futures_pnl_sign)
+_cum_fut_arr = np.asarray(cum_fut_wan, dtype=float)
 
 _ensure_matplotlib_chinese_font()
 _fp = _matplotlib_cjk_fontproperties()
+V_spot = res_spot["Value_Change_Spot"].to_numpy(dtype=float)
+_n_sp = len(V_spot)
+if _n_sp == 0:
+    spot_curve_wan = np.array([], dtype=float)
+    _spot_lbl = "现货净资产变动（万元）"
+else:
+    d0 = np.diff(V_spot, prepend=0.0)
+    spread_R = np.zeros(_n_sp, dtype=float)
+    prem_on_sell = np.zeros(_n_sp, dtype=float)
+    ts_norm = pd.to_datetime(res_spot["Date"]).dt.normalize()
+    ts_np = ts_norm.to_numpy()
+    for _, r in df_e.iterrows():
+        db = _cell_date(r.get("购买日期"))
+        ds = _cell_date(r.get("出售日期"))
+        if db is None or ds is None or ds < db:
+            continue
+        _, fut_s = lookup_spot_fut(sub, ds)
+        if fut_s is None:
+            continue
+        m_sell = _row_float(r, "出售价期货倍数", _DEFAULT_SELL_FUT_MULT)
+        a_sell = _row_float(r, "出售价加价(元/吨)", 0.0)
+        prem_pt = float(fut_s) * (float(m_sell) - 1.0) + float(a_sell)
+        p_prem = prem_pt * float(spot_tons)
+        if abs(p_prem) < 1e-9:
+            continue
+        t_sell = pd.Timestamp(ds).normalize().to_datetime64()
+        m_sell_day = ts_np == t_sell
+        if not m_sell_day.any():
+            continue
+        prem_on_sell[m_sell_day] += p_prem
+        t_lo = pd.Timestamp(db).normalize().to_datetime64()
+        m_win = (ts_np >= t_lo) & (ts_np <= t_sell)
+        nn = int(m_win.sum())
+        if nn <= 0:
+            continue
+        spread_R[m_win] += p_prem / nn
+    d_adj = d0 - prem_on_sell + spread_R
+    spot_curve_wan = np.cumsum(d_adj) / 10000.0
+    _spot_lbl = "现货净资产变动（售价相对期货溢价按天摊销，万元）"
+
+_m = min(len(spot_curve_wan), len(_cum_fut_arr))
+if _m == 0:
+    total_pnl_wan = np.array([], dtype=float)
+    _date_total = res_spot["Date"].iloc[:0]
+else:
+    total_pnl_wan = spot_curve_wan[:_m] + _cum_fut_arr[:_m]
+    _date_total = res_spot["Date"].iloc[:_m]
+
 fig, ax = plt.subplots(figsize=(12, 5))
 ax.plot(
     res_spot["Date"],
-    res_spot["Value_Change_Spot"] / 10000,
-    label="现货净资产变动（相对首日，万元）",
+    spot_curve_wan,
+    label=_spot_lbl,
     linewidth=2,
 )
 ax.plot(
     sub["Date"],
-    cum_fut_wan,
+    _cum_fut_arr,
     label="期货盯市累计（相对各笔开仓价，万元）",
     linewidth=2,
     linestyle="--",
 )
+if len(total_pnl_wan) > 0:
+    ax.plot(
+        _date_total,
+        total_pnl_wan,
+        label="现货+期货合计（万元）",
+        linewidth=2.2,
+        color="tab:green",
+    )
 ax.axhline(0, color="black", linestyle=":", alpha=0.4)
 if _fp:
     ax.set_ylabel("万元", fontproperties=_fp)
@@ -1041,18 +1135,48 @@ plt.tight_layout()
 st.pyplot(fig)
 plt.close(fig)
 st.caption(
-    "虚线含义：**期货盯市累计**——持有期货套保期间，随**当日期货价相对购买日开仓价**变化而上下波动；"
-    "到**出售日平仓**后该笔盈亏固定。此前旧版把整笔盈亏只在出售日「一次性入账」，前面会像一条横线，容易误解。"
-    "上方指标卡「期货盈亏合计」= 各笔开平价差结果，与虚线在**区间最后一天**的取值一致。"
+    "**绿色**：蓝线现货 + **期货盯市累计** 的逐日合计（万元）。**橙色虚线**：期货盯市。"
+    "蓝线作图时对 **(出售价−当日期货价)×吨** 做持仓期均摊，**期末与明细表「现货净资产变动」累计一致**；表格与 Excel 为仿真原值。"
 )
 
+st.markdown("---")
+_price_title = f"{vn} — 期货与现货价格走势" if vn else "碳酸锂（或所上传品种）— 期货与现货价格走势"
+st.subheader(_price_title)
+st.caption("价格来自当前购销区间内的 CSV 列「现货价」「期货价」（元/吨）。")
+_ensure_matplotlib_chinese_font()
+_fp2 = _matplotlib_cjk_fontproperties()
+fig_px, ax_px = plt.subplots(figsize=(12, 4.5))
+ax_px.plot(sub["Date"], sub["Spot"], label="现货价格", color="tab:blue", linewidth=2)
+ax_px.plot(
+    sub["Date"],
+    sub["Futures"],
+    label="期货价格",
+    color="tab:orange",
+    linewidth=2,
+    linestyle="--",
+)
+if _fp2:
+    ax_px.set_ylabel("元/吨", fontproperties=_fp2)
+    ax_px.legend(loc="best", prop=_fp2)
+else:
+    ax_px.set_ylabel("元/吨")
+    ax_px.legend(loc="best")
+ax_px.grid(True, alpha=0.3)
+plt.tight_layout()
+st.pyplot(fig_px)
+plt.close(fig_px)
+
 with st.expander("现货 — 逐日明细（中文列）"):
+    st.caption(
+        "**现货持仓浮动盈亏**（元）= 日末库存吨 ×（当日 CSV 现货价 − 加权平均成本）；无库存为 0；**负值**表示相对成本的浮亏。"
+    )
     _spot_cn = _df_rename_cn(res_spot.copy(), CN_COL_现货逐日)
     _show_spot_cn = [
         "日期",
         "现货价",
         "期货价",
         "现货库存吨",
+        "现货持仓浮动盈亏",
         "现货现金",
         "现货当日已实现盈亏",
         "现货净资产变动",
@@ -1118,6 +1242,38 @@ if show_margin_sim:
     plt.tight_layout()
     st.pyplot(fig_m)
     plt.close(fig_m)
+
+    st.subheader("逐日：所需占用保证金")
+    st.caption(
+        "按当日期货结算价、**现货库存×套保比例**、侧栏**保证金率**计算的基础占用（交易所规则简化模型）；纵轴为**万元**。"
+    )
+    _req_wan = res_margin["Margin_Required"].values / 10000.0
+    _ensure_matplotlib_chinese_font()
+    _fp_mr = _matplotlib_cjk_fontproperties()
+    fig_mr, ax_mr = plt.subplots(figsize=(12, 4))
+    ax_mr.fill_between(
+        res_margin["Date"],
+        _req_wan,
+        alpha=0.25,
+        color="#34495e",
+    )
+    ax_mr.plot(
+        res_margin["Date"],
+        _req_wan,
+        color="#2c3e50",
+        linewidth=2,
+        label="占用保证金",
+    )
+    if _fp_mr:
+        ax_mr.set_ylabel("万元", fontproperties=_fp_mr)
+        ax_mr.legend(loc="best", prop=_fp_mr)
+    else:
+        ax_mr.set_ylabel("万元")
+        ax_mr.legend(loc="best")
+    ax_mr.grid(True, alpha=0.3)
+    plt.tight_layout()
+    st.pyplot(fig_mr)
+    plt.close(fig_mr)
 
     mc1, mc2, mc3 = st.columns(3)
     with mc1:
