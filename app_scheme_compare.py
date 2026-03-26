@@ -214,26 +214,44 @@ def extract_futures_variety_name(filename):
 
 
 def read_price_csv(uploaded_file):
-    encoding = "gbk"
-    try:
-        df = pd.read_csv(uploaded_file, encoding=encoding)
-    except Exception:
-        encoding = "utf-8-sig"
-        df = pd.read_csv(uploaded_file, encoding=encoding)
+    """读取上传 CSV。上传流只能顺序读，换编码重试前必须 seek(0)，否则会 EmptyDataError。"""
+    if uploaded_file is None:
+        return None, "utf-8-sig"
+    df = None
+    encoding_used = "utf-8-sig"
+    for enc in ("gbk", "utf-8-sig", "utf-8"):
+        try:
+            uploaded_file.seek(0)
+        except (AttributeError, OSError):
+            pass
+        try:
+            df = pd.read_csv(uploaded_file, encoding=enc)
+        except (pd.errors.EmptyDataError, UnicodeDecodeError, pd.errors.ParserError):
+            df = None
+            continue
+        except Exception:
+            df = None
+            continue
+        if df is not None and len(df.columns) > 0:
+            encoding_used = enc
+            break
+        df = None
+    if df is None or df.empty:
+        return None, encoding_used
     df.columns = [str(c).strip() for c in df.columns]
     cols = df.columns
     col_time = next((c for c in cols if "时间" in c or "Date" in c or "date" in c.lower()), None)
     col_spot = next((c for c in cols if "现货" in c), None)
     col_fut = next((c for c in cols if ("期货" in c or "主力" in c) and "价格" in c), None)
     if not (col_time and col_spot and col_fut):
-        return None, encoding
+        return None, encoding_used
     df = df.rename(columns={col_time: "Date", col_spot: "Spot", col_fut: "Futures"})
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     for col in ["Spot", "Futures"]:
         df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce")
     df = df.dropna(subset=["Date", "Spot", "Futures"]).sort_values("Date").reset_index(drop=True)
     df["Date"] = df["Date"].dt.normalize()
-    return df, encoding
+    return df, encoding_used
 
 
 def _wa_add(inv, avg_cost, qty, unit_cost):
@@ -739,7 +757,10 @@ if not uploaded:
 
 price_df, enc = read_price_csv(uploaded)
 if price_df is None:
-    st.error("CSV 需包含：日期、现货价格、期货价格列。")
+    st.error(
+        "未能读取 CSV：请确认文件非空，且含 **时间/Date**、**现货价**、**期货或主力合约价格** 列；"
+        "编码支持 GBK、UTF-8。"
+    )
     st.stop()
 
 st.success(f"已读取行情 {len(price_df)} 行（{enc}）")
